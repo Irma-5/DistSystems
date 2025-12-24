@@ -44,27 +44,14 @@ MPI_Status stat_buf[4];
 void error_handler(MPI_Comm *comm, int *err, ...) {
     MPIX_Comm_revoke(*comm);
 }
-void try_to_suicide(int curr_iteration) {
+void init_fault(int curr_iteration) {
     if (!fault_injected && rank == rank_to_damage && curr_iteration == iteration_to_damage) {
         printf("Процесс %d (global %d): имитация сбоя на итерации %d\n", 
                rank, global_rank, curr_iteration);
         fflush(stdout);
-        raise(SIGKILL);  // Жёсткое убийство процесса
+        raise(SIGKILL);
     }
 }
-
-// void try_to_suicide(int curr_iteration) {
-//     if (!fault_injected && rank == rank_to_damage && curr_iteration == iteration_to_damage) {
-//         printf("Процесс %d (global %d): имитация сбоя на итерации %d\n", 
-//                rank, global_rank, curr_iteration);
-//         fflush(stdout);
-//         // ULFM-compatible failure simulation
-//         fault_injected = 1;  // сбой сработал
-//         MPIX_Comm_revoke(COMP_COMM);
-//         MPI_Finalize();
-//         exit(1);
-//     }
-// }
 
 void recompute_geometry() {
     MPI_Comm_size(COMP_COMM, &size);
@@ -112,7 +99,6 @@ int main(int an, char **as) {
 
     int is_reserve = (total_rank == RESERVE_RANK);
 
-    // Изначально создаём рабочий коммуникатор без резервного
     int color = is_reserve ? MPI_UNDEFINED : 0;
     MPI_Comm_split(MPI_COMM_WORLD, color, total_rank, &COMP_COMM);
     if (COMP_COMM != MPI_COMM_NULL) {
@@ -129,7 +115,7 @@ int main(int an, char **as) {
         MPIX_Comm_shrink(MPI_COMM_WORLD, &COMP_COMM);
         MPI_Comm_set_errhandler(COMP_COMM, MPI_ERRORS_RETURN);
         
-        printf("Резервный процесс %d: присоединился после сбоя!\n", total_rank);
+        printf("Резервный процесс %d: подключился после сбоя\n", total_rank);
         fflush(stdout);
 
 
@@ -142,7 +128,6 @@ int main(int an, char **as) {
             printf("Резервный процесс %d: получен сигнал начать работу!\n", total_rank);
             fflush(stdout);
 
-            // <<< ДОБАВЛЕНО: сужаем коммуникатор для резервного процесса
             MPIX_Comm_shrink(MPI_COMM_WORLD, &COMP_COMM);
             MPI_Comm_set_errhandler(COMP_COMM, MPI_ERRORS_RETURN);
 
@@ -184,7 +169,7 @@ restart:
         for (it = start_it; it <= itmax; it++) {
             eps = 0.;
 
-            try_to_suicide(it);
+            init_fault(it);
 
             int rc = relax1();
             if (rc != MPI_SUCCESS) goto recover;
@@ -238,12 +223,8 @@ restart:
 recover:
     printf("Процесс %d: обнаружен сбой, восстановление...\n", total_rank);
     fflush(stdout);
-
-    // Уведомляем всех о сбое (если еще не знают)
     MPIX_Comm_revoke(COMP_COMM);
-
     MPI_Comm new_comm;
-    // Создаем новый чистый коммуникатор без «мертвеца»
     MPIX_Comm_shrink(MPI_COMM_WORLD, &new_comm);
     
     if (COMP_COMM != MPI_COMM_NULL && COMP_COMM != MPI_COMM_WORLD) {
@@ -252,7 +233,6 @@ recover:
     COMP_COMM = new_comm;
     MPI_Comm_set_errhandler(COMP_COMM, MPI_ERRORS_RETURN);
     
-    // Пересчитываем роли и индексы в новом составе
     recompute_geometry();
 
     fault_injected = 1; 
